@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 
 const TEST_DATA: &str = "\
@@ -229,6 +229,7 @@ struct State {
     todos: Vec<(Pos, Pos)>,                     // (prev_pos, pos) pairs: start of new paths to explore
     current_segment: Option<Vec<Pos>>,          // current segment being explored
     m_max: usize,
+    explored_segments: HashSet<(Pos, Pos)>,    // pos_prev, pos
 }
 
 
@@ -244,8 +245,8 @@ fn main() {
 }
 
 fn solve() {
-    let data = TEST_DATA;
-    // let data = DATA;
+    // let data = TEST_DATA;
+    let data = DATA;
 
     let m_max = data.lines().count();
     println!("m_max: {}", m_max);
@@ -263,6 +264,9 @@ fn solve() {
     .collect();
 
     // println!("{:?}", tiles);
+    // find the exit tile
+    let exit = *tiles.iter().filter(|(_, &tile)| tile == Tile::Exit).next().unwrap().0;
+    println!("💥 exit pos: {:?}", exit);
 
     let mut state = State{
         junction_pts: HashMap::new(),
@@ -272,6 +276,7 @@ fn solve() {
         )],
         current_segment: None,
         m_max: m_max,
+        explored_segments: HashSet::new(),
     };
     let mut keep_going = true;
 
@@ -285,8 +290,79 @@ fn solve() {
         };
     }
     
-    println!("🌿 {:?}\n\n", state);
+    let mut junction_pts_vec = state.junction_pts.iter().collect::<Vec<_>>();
+    junction_pts_vec.sort_by(|e1, e2| e1.0.cmp(e2.0));
+    junction_pts_vec.iter().for_each(|(pos, v)| println!("🌿 {:?} -> {:?}", pos, v));
 
+
+    // ***** tree search for longest path *****
+
+    // representation of ONE path along the maze: a vector of Pos. Puzzle rule: a pos may never repeat along one path
+    // iterate a family of paths: each path is a vector of Pos
+    let mut paths = Paths{
+        completed: Vec::new(),
+        in_progress: vec![Path(vec![Pos(0, 0)], 0)],
+    };
+
+    while !paths.in_progress.is_empty() {
+        paths = take_steps(paths, &state.junction_pts, exit);
+    }
+
+    paths.completed.sort_by(|p1, p2| p2.1.cmp(&p1.1));
+    paths.completed.iter().for_each(|path| println!("👉 {:?}", path));
+
+
+}
+
+fn take_steps(mut paths: Paths, junction_pts: &HashMap<Pos, Vec<(Pos, u16)>>, exit: Pos) -> Paths {
+    let mut new_paths = Vec::new();
+    let mut new_completed = Vec::new();
+
+    for path in paths.in_progress.iter() {
+        let next_pt_candidates = junction_pts.get(&path.0[path.0.len()-1]).unwrap();
+        for cand in next_pt_candidates.iter() {
+            if !path.0.contains(&cand.0) {
+                let mut new_path = path.0.clone();
+                new_path.push(cand.0);
+
+                match cand.0 == exit {
+                    true => new_completed.push(Path(new_path, path.1 + cand.1 as u32)),  // also add the lengths
+                    false => new_paths.push(Path(new_path, path.1 + cand.1 as u32)),
+                }
+            }
+        }
+    }
+
+    paths.completed.extend(new_completed);
+    paths.in_progress = new_paths;
+    paths
+}
+
+#[derive(Debug)]
+struct Path(Vec<Pos>, u32); // (junction_pts, total_length)
+
+
+#[derive(Debug)]
+struct Paths {
+    completed: Vec<Path>,
+    in_progress: Vec<Path>,
+}
+
+
+
+fn ok_to_walk(prev_pos: Pos, pos: Pos, tiles: &HashMap<Pos, Tile>) -> bool {
+    let Pos(m, n) = pos;
+    let Pos(prev_m, prev_n) = prev_pos;
+
+    match (m, m as i32 - prev_m as i32, n as i32 - prev_n as i32, tiles.get(&prev_pos)) {        
+        (0, _, _, _) => true, // from entrance: first step is always ok
+        (_, _, _, Some(Tile::Walkable | Tile::Exit | Tile::Entrace)) => true,
+        (_, 0, 1, Some(Tile::Right)) => true,
+        (_, 0, -1, Some(Tile::Left)) => true,
+        (_, 1, 0, Some(Tile::Down)) => true,
+        (_, -1, 0, Some(Tile::Up)) => true,
+        _ => false,
+    }
 }
 
 
@@ -299,6 +375,12 @@ fn continue_segment(mut state: State, tiles: &HashMap<Pos, Tile>) -> State {
     } else { 
         unreachable!() 
     };
+
+    if !ok_to_walk(prev_pos, pos, tiles) {  // abandon this path
+        state.current_segment = None;
+        return state;
+    }
+
     let moves = potential_move(prev_pos, pos, tiles);
 
     match moves.len() {
@@ -308,7 +390,7 @@ fn continue_segment(mut state: State, tiles: &HashMap<Pos, Tile>) -> State {
         },
         1 if tiles[&moves[0]] == Tile::Exit => {   // we have reached the exit
             let end_pos = moves[0];
-            let seg_length = state.current_segment.as_ref().unwrap().len() as u16;    // is this the right length??? 🧨
+            let seg_length = state.current_segment.as_ref().unwrap().len() as u16 - 1;    // is this the right length??? 🧨
             let seg_start_pos = state.current_segment.as_ref().unwrap()[0];
 
             println!("🦖🌿 end reached end_pos: {:?}, seg_length: {}, seg_start_pos: {:?}", end_pos, seg_length, seg_start_pos);
@@ -332,7 +414,7 @@ fn continue_segment(mut state: State, tiles: &HashMap<Pos, Tile>) -> State {
         _ => {  // we have reached a junction point
             state.todos.extend(moves.iter().map(|&next_pos| (pos, next_pos)));
             
-            let seg_length = state.current_segment.as_ref().unwrap().len() as u16;    // is this the right length??? 🧨
+            let seg_length = state.current_segment.as_ref().unwrap().len() as u16 - 1;    // is this the right length??? 🧨
             let seg_start_pos = state.current_segment.as_ref().unwrap()[0];
 
             // add the current segment to the junction_pts hashmap: check if the start pos is already in the hashmap
@@ -351,37 +433,45 @@ fn continue_segment(mut state: State, tiles: &HashMap<Pos, Tile>) -> State {
     }    
 }
 
-
+// it could be that the next todo item was already done: if the segment is already in the explored_segments set
 fn process_todo_item(mut state: State, _tiles: &HashMap<Pos, Tile>) -> State {
     debug_assert_eq!(state.current_segment, None);
-    let (prev_pos, pos) = state.todos.pop().unwrap();
-    state.current_segment = Some(vec![prev_pos, pos]);
+    while !state.todos.is_empty() {
+        let (prev_pos, pos) = state.todos.pop().unwrap();
+        if !state.explored_segments.contains(&(prev_pos, pos)) {
+            state.explored_segments.insert((prev_pos, pos));
+            state.current_segment = Some(vec![prev_pos, pos]);
+            return state;
+        }
+    }
     state
 }
 
 
+/// this also includes other incoming segments: i.e. which we cannot move ONTO
+/// from the junction point. But we need to know that they are there to split the segment
 fn potential_move(prev_pos: Pos, pos: Pos, tiles: &HashMap<Pos, Tile>) -> Vec<Pos> {
     let mut moves = Vec::new();
     let Pos(m, n) = pos;
     let Pos(prev_m, prev_n) = prev_pos;
 
     if m>0 && m-1 != prev_m {
-        if let Some(Tile::Walkable | Tile::Up | Tile::Exit) = tiles.get(&Pos(m-1, n)) {
+        if let Some(_) = tiles.get(&Pos(m-1, n)) {
             moves.push(Pos(m-1, n));
         }
     }
     if m+1 != prev_m {
-        if let Some(Tile::Walkable | Tile::Down | Tile::Exit) = tiles.get(&Pos(m+1, n)) {
+        if let Some(_) = tiles.get(&Pos(m+1, n)) {
             moves.push(Pos(m+1, n));
         }
     }
     if n>0 && n-1 != prev_n {
-        if let Some(Tile::Walkable | Tile::Left | Tile::Exit) = tiles.get(&Pos(m, n-1)) {
+        if let Some(_) = tiles.get(&Pos(m, n-1)) {
             moves.push(Pos(m, n-1));
         }
     }
     if n+1 != prev_n {
-        if let Some(Tile::Walkable | Tile::Right | Tile::Exit) = tiles.get(&Pos(m, n+1)) {
+        if let Some(_) = tiles.get(&Pos(m, n+1)) {
             moves.push(Pos(m, n+1));
         }
     }
