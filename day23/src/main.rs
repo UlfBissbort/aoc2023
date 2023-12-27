@@ -237,19 +237,26 @@ struct State {
 
 
 fn main() {
-    // time this function
-    let t0 = std::time::Instant::now();
-    solve();
-    let t1 = std::time::Instant::now();
-    println!("⏱️  Time taken: {:?}", t1 - t0);
-}
-
-fn solve() {
     // let data = TEST_DATA;
     let data = DATA;
 
+    // time this function
+    let t0 = std::time::Instant::now();
+    solve(data, ok_to_walk_part_1);
+    let t1 = std::time::Instant::now();
+    println!("⏱️  Time taken for Part 1: {:?}\n\n", t1 - t0);
+
+    let t0 = std::time::Instant::now();
+    solve(data, ok_to_walk_part_2);
+    let t1 = std::time::Instant::now();
+    println!("⏱️  Time taken for Part 2: {:?}\n\n", t1 - t0);
+}
+
+
+type Sig = fn(Pos, Pos, &HashMap<Pos, Tile>) -> bool;
+
+fn solve(data: &str, ok_to_walk: Sig) {
     let m_max = data.lines().count();
-    println!("m_max: {}", m_max);
 
     // create a hashmap Pos(m, n) => Tile
     // Only insert walkable tiles
@@ -262,12 +269,9 @@ fn solve() {
             .filter(|&(_, tile)| tile != Tile::Wall)
     })
     .collect();
-
-    // println!("{:?}", tiles);
-    // find the exit tile
+    
     let exit = *tiles.iter().filter(|(_, &tile)| tile == Tile::Exit).next().unwrap().0;
-    println!("💥 exit pos: {:?}", exit);
-
+ 
     let mut state = State{
         junction_pts: HashMap::new(),
         todos: vec![(  // populate graph crawler with initial state
@@ -283,7 +287,7 @@ fn solve() {
     while keep_going {
         (state, keep_going) = match state {
             // if there is a current path being explored, continue exploring it
-            _ if state.current_segment != None =>(continue_segment(state, &tiles), true),
+            _ if state.current_segment != None =>(continue_segment(state, &tiles, ok_to_walk), true),
             // if there is no current path, start exploring a new one from the todo list if it is not empty
             _ if !state.todos.is_empty() => (process_todo_item(state, &tiles), true),
             _ => (state, false),
@@ -309,11 +313,14 @@ fn solve() {
     }
 
     paths.completed.sort_by(|p1, p2| p2.1.cmp(&p1.1));
-    paths.completed.iter().for_each(|path| println!("👉 {:?}", path));
+    paths.completed.iter().take(5).for_each(|path| println!("👉 {:?}", path));
+    println!("total no of paths: {}", paths.completed.len());
 
 
 }
 
+
+/// add the next step for each path in the tree search step procedure
 fn take_steps(mut paths: Paths, junction_pts: &HashMap<Pos, Vec<(Pos, u16)>>, exit: Pos) -> Paths {
     let mut new_paths = Vec::new();
     let mut new_completed = Vec::new();
@@ -338,6 +345,7 @@ fn take_steps(mut paths: Paths, junction_pts: &HashMap<Pos, Vec<(Pos, u16)>>, ex
     paths
 }
 
+
 #[derive(Debug)]
 struct Path(Vec<Pos>, u32); // (junction_pts, total_length)
 
@@ -349,8 +357,8 @@ struct Paths {
 }
 
 
-
-fn ok_to_walk(prev_pos: Pos, pos: Pos, tiles: &HashMap<Pos, Tile>) -> bool {
+/// are we allowed to walk along this step?
+fn ok_to_walk_part_1(prev_pos: Pos, pos: Pos, tiles: &HashMap<Pos, Tile>) -> bool {
     let Pos(m, n) = pos;
     let Pos(prev_m, prev_n) = prev_pos;
 
@@ -365,8 +373,14 @@ fn ok_to_walk(prev_pos: Pos, pos: Pos, tiles: &HashMap<Pos, Tile>) -> bool {
     }
 }
 
+/// are we allowed to walk along this step?
+/// There are no restrictions for part 2
+fn ok_to_walk_part_2(prev_pos: Pos, pos: Pos, tiles: &HashMap<Pos, Tile>) -> bool {
+    true
+}
 
-fn continue_segment(mut state: State, tiles: &HashMap<Pos, Tile>) -> State {
+
+fn continue_segment(mut state: State, tiles: &HashMap<Pos, Tile>, ok_to_walk: Sig) -> State {
     // get the last two elements of the vector
     let (prev_pos, pos) = 
     if let Some(ref v) = state.current_segment {
